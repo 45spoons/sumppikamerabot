@@ -1,53 +1,94 @@
-use std::fs;
+use ferrisgram::error::{GroupIteration, Result};
+use ferrisgram::ext::filters::message;
+use ferrisgram::ext::handlers::{CommandHandler, MessageHandler};
+use ferrisgram::ext::{Context, Dispatcher, Updater};
+use ferrisgram::types::{BotCommand, LinkPreviewOptions};
+use ferrisgram::Bot;
+use std::env;
+//use std::sync::Arc;
+use dotenvy::dotenv;
 
-mod telegram {
-    use serde::{Deserialize, Serialize};
+#[allow(unused)]
+#[tokio::main]
+async fn main() {
+    dotenv().ok();
+    let bot_token = match env::var("BOT_TOKEN") {
+        Ok(s) => s,
+        Err(err) => panic!("failed to start bot: {}", err),
+    };
+    // This function creates a new bot instance and the error is handled accordingly
+    let bot = match Bot::new(&bot_token, None).await {
+        Ok(bot) => bot,
+        Err(error) => panic!("failed to create bot: {}", error),
+    };
+    // dispatcher is a part of internal functionality of updater
+    // you may use it for adding handlers.
+    let mut dispatcher = &mut Dispatcher::new(&bot);
 
-    #[derive(Serialize, Deserialize)]
-    struct User {
-        id: u32,
-        is_bot: bool,
-        first_name: String,
-        last_name: Option<String>,
-        username: Option<String>,
-        language_code: Option<String>,
-        is_premium: Option<bool>,
-        added_to_attachment_menu: Option<bool>,
-        can_join_groups: Option<bool>,
-        can_read_all_group_messages: Option<bool>,
-        supports_guest_queries: Option<bool>,
-        supports_inline_queries: Option<bool>,
-        can_connect_to_business: Option<bool>,
-        has_main_web_app: Option<bool>,
-        has_topics_enabled: Option<bool>,
-        allows_users_to_create_topics: Option<bool>,
-        can_manage_bots: Option<bool>,
-        supports_join_request_queries: Option<bool>,
-    }
+    // add_handler method maps the provided handler in group 0 automatically
+    dispatcher.add_handler(CommandHandler::new("start", start));
+
+    // add_handler_to_group is used to map the provided handler to a group manually.
+    // note that handler groups are processed in ascending order.
+    dispatcher.add_handler_to_group(
+        MessageHandler::new(
+            echo,
+            message::Text::filter().or(message::Caption::filter()),
+        ),
+        1,
+    );
+
+    let commands = Vec::<BotCommand>::new();
+    bot.set_my_commands(commands);
+
+    let mut updater = Updater::new(&bot, dispatcher);
+
+    updater.start_polling(true).await;
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let tgapikey_bytes = fs::read("./apikey.txt").expect("apikey should be in a readable file called apikey.txt");
-    let tgapikey = String::from_utf8(tgapikey_bytes).expect("tgapikey should be valid utf8");
+// This is our callable function for the command handler that we declared earlier
+// It will be triggered when someone send /start to the bot.
+async fn start(bot: Bot, ctx: Context) -> Result<GroupIteration> {
+    // Same logic as chat applies on unwrapping effective message here.
+    let msg = ctx.effective_message.unwrap();
+    let mut link_preview_options = LinkPreviewOptions::new();
+    link_preview_options.is_disabled = Some(true);
+    // Ferrisgram offers some custom helpers which make your work easy
+    // Here we have used one of those helpers known as msg.reply
+    msg.reply(
+        &bot,
+        "Hey! I am an echo bot built using [Ferrisgram](https://github.com/ferrisgram/ferrisgram).
+I will repeat your messages.",
+    )
+    // this method will ensure that our text will be sent with markdown formatting.
+    .parse_mode("markdown".to_string())
+    .link_preview_options(link_preview_options)
+    // You must use this send() method in order to send the request to the API
+    .send()
+    .await?;
 
-    let _ = get_updates(tgapikey);
-    Ok(())
+    // GroupIteration::EndGroups will end iteration of groups for an update.
+    // This means that rest of the pending groups and their handlers won't be checked
+    // for this particular update.
+    Ok(GroupIteration::EndGroups)
 }
 
-fn get_updates(apikey: String) -> Result<(), Box<dyn std::error::Error>> {
-    let api_result = reqwest::blocking::get(format!("https://api.telegram.org/bot{apikey}/getUpdates"));
-    match api_result {
-        Ok(api_response) => {
-            println!("api_result = {api_response:?}");
-            let body_result = api_response.text();
-            match body_result {
-                Ok(body) => {
-                    println!("yeah dog! we got body: {body}")
-                },
-                Err(message) => println!("ehh... body parse no worky: {message}"),
-            }
-        },
-        Err(message) => println!("ehh... api no worky: {message}"),
-    }
-    Ok(())
+// This is our callable function for our message handler which will be used to
+// repeat the text.
+async fn echo(bot: Bot, ctx: Context) -> Result<GroupIteration> {
+    // Command Handler recieves message updates which have chat as a compulsory field.
+    // Hence we can unwrap effective chat without checking if it is none.
+    let chat = ctx.effective_chat.unwrap();
+    // Same logic as chat applies on unwrapping effective message here.
+    let msg = ctx.effective_message.unwrap();
+    // Every api method creates a builder which contains various parameters of that respective method.
+    bot.copy_message(chat.id, chat.id, msg.message_id)
+        // You must use this send() method in order to send the request to the API
+        .send()
+        .await?;
+
+    // GroupIteration::EndGroups will end iteration of groups for an update.
+    // This means that rest of the pending groups and their handlers won't be checked
+    // for this particular update.
+    Ok(GroupIteration::EndGroups)
 }
