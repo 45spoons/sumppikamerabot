@@ -1,94 +1,43 @@
-use ferrisgram::error::{GroupIteration, Result};
-use ferrisgram::ext::filters::message;
-use ferrisgram::ext::handlers::{CommandHandler, MessageHandler};
-use ferrisgram::ext::{Context, Dispatcher, Updater};
-use ferrisgram::types::{BotCommand, LinkPreviewOptions};
-use ferrisgram::Bot;
 use std::env;
-//use std::sync::Arc;
 use dotenvy::dotenv;
+use tracing::{event, Level};
+use tracing_subscriber::{EnvFilter};
+use teloxide::{prelude::*, utils::command::BotCommands};
 
-#[allow(unused)]
 #[tokio::main]
 async fn main() {
     dotenv().ok();
-    let bot_token = match env::var("BOT_TOKEN") {
-        Ok(s) => s,
-        Err(err) => panic!("failed to start bot: {}", err),
-    };
-    // This function creates a new bot instance and the error is handled accordingly
-    let bot = match Bot::new(&bot_token, None).await {
-        Ok(bot) => bot,
-        Err(error) => panic!("failed to create bot: {}", error),
-    };
-    // dispatcher is a part of internal functionality of updater
-    // you may use it for adding handlers.
-    let mut dispatcher = &mut Dispatcher::new(&bot);
+    tracing_subscriber::fmt().with_env_filter(EnvFilter::from_env("LOG_LEVEL")).init();
+    event!(Level::INFO, "Starting kahvikamera bot...");
+    let bot_token = env::var("BOT_TOKEN").expect("Bot API key should be set in env as BOT_TOKEN");
+    let bot = Bot::new(bot_token);
 
-    // add_handler method maps the provided handler in group 0 automatically
-    dispatcher.add_handler(CommandHandler::new("start", start));
-
-    // add_handler_to_group is used to map the provided handler to a group manually.
-    // note that handler groups are processed in ascending order.
-    dispatcher.add_handler_to_group(
-        MessageHandler::new(
-            echo,
-            message::Text::filter().or(message::Caption::filter()),
-        ),
-        1,
-    );
-
-    let commands = Vec::<BotCommand>::new();
-    bot.set_my_commands(commands);
-
-    let mut updater = Updater::new(&bot, dispatcher);
-
-    updater.start_polling(true).await;
+    let _ = bot.set_my_commands(Command::bot_commands()).await;
+    Command::repl(bot, answer).await;
 }
 
-// This is our callable function for the command handler that we declared earlier
-// It will be triggered when someone send /start to the bot.
-async fn start(bot: Bot, ctx: Context) -> Result<GroupIteration> {
-    // Same logic as chat applies on unwrapping effective message here.
-    let msg = ctx.effective_message.unwrap();
-    let mut link_preview_options = LinkPreviewOptions::new();
-    link_preview_options.is_disabled = Some(true);
-    // Ferrisgram offers some custom helpers which make your work easy
-    // Here we have used one of those helpers known as msg.reply
-    msg.reply(
-        &bot,
-        "Hey! I am an echo bot built using [Ferrisgram](https://github.com/ferrisgram/ferrisgram).
-I will repeat your messages.",
-    )
-    // this method will ensure that our text will be sent with markdown formatting.
-    .parse_mode("markdown".to_string())
-    .link_preview_options(link_preview_options)
-    // You must use this send() method in order to send the request to the API
-    .send()
-    .await?;
-
-    // GroupIteration::EndGroups will end iteration of groups for an update.
-    // This means that rest of the pending groups and their handlers won't be checked
-    // for this particular update.
-    Ok(GroupIteration::EndGroups)
+#[derive(BotCommands, Clone)]
+#[command(rename_rule = "lowercase", description = "These commands are supported:")]
+enum Command {
+    #[command(description = "display this text.")]
+    Help,
+    #[command(description = "handle a username.")]
+    Username(String),
+    #[command(description = "handle a username and an age.", parse_with = "split")]
+    UsernameAndAge { username: String, age: u8 },
 }
 
-// This is our callable function for our message handler which will be used to
-// repeat the text.
-async fn echo(bot: Bot, ctx: Context) -> Result<GroupIteration> {
-    // Command Handler recieves message updates which have chat as a compulsory field.
-    // Hence we can unwrap effective chat without checking if it is none.
-    let chat = ctx.effective_chat.unwrap();
-    // Same logic as chat applies on unwrapping effective message here.
-    let msg = ctx.effective_message.unwrap();
-    // Every api method creates a builder which contains various parameters of that respective method.
-    bot.copy_message(chat.id, chat.id, msg.message_id)
-        // You must use this send() method in order to send the request to the API
-        .send()
-        .await?;
+async fn answer(bot: Bot, msg: Message, cmd: Command) -> ResponseResult<()> {
+    match cmd {
+        Command::Help => bot.send_message(msg.chat.id, Command::descriptions().to_string()).await?,
+        Command::Username(username) => {
+            bot.send_message(msg.chat.id, format!("Your username is @{username}.")).await?
+        }
+        Command::UsernameAndAge { username, age } => {
+            bot.send_message(msg.chat.id, format!("Your username is @{username} and age is {age}."))
+                .await?
+        }
+    };
 
-    // GroupIteration::EndGroups will end iteration of groups for an update.
-    // This means that rest of the pending groups and their handlers won't be checked
-    // for this particular update.
-    Ok(GroupIteration::EndGroups)
+    Ok(())
 }
